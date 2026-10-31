@@ -53,6 +53,9 @@ final class AppState {
             guard season != oldValue else { return }
             UserDefaults.standard.set(season, forKey: Self.lastSelectedSeasonKey)
             errorMessage = nil
+            selectedRaceID = nil
+            selectedDriverID = nil
+            selectedConstructorID = nil
             races = []
             driverStandings = []
             constructorStandings = []
@@ -65,15 +68,46 @@ final class AppState {
     }
     var selection: SidebarItem? = .schedule
 
+    var selectedRaceID: Race.ID?
+    var selectedDriverID: DriverStanding.ID?
+    var selectedConstructorID: ConstructorStanding.ID?
+
+    var selectedRace: Race? {
+        races.first(where: { $0.id == selectedRaceID })
+    }
+
+    var selectedDriverStanding: DriverStanding? {
+        driverStandings.first(where: { $0.id == selectedDriverID })
+    }
+
+    var selectedConstructorStanding: ConstructorStanding? {
+        constructorStandings.first(where: { $0.id == selectedConstructorID })
+    }
+
     var races: [Race] = [] {
         didSet {
             nextRace = races.nextUpcoming() ?? races.last
+            if selectedRaceID == nil || !races.contains(where: { $0.id == selectedRaceID }) {
+                selectedRaceID = (races.nextUpcoming() ?? races.last ?? races.first)?.id
+            }
             MacServices.updateDockTile(with: races)
         }
     }
     private(set) var nextRace: Race?
-    var driverStandings: [DriverStanding] = []
-    var constructorStandings: [ConstructorStanding] = []
+    var driverStandings: [DriverStanding] = [] {
+        didSet {
+            if selectedDriverID == nil || !driverStandings.contains(where: { $0.id == selectedDriverID }) {
+                selectedDriverID = driverStandings.first?.id
+            }
+        }
+    }
+    var constructorStandings: [ConstructorStanding] = [] {
+        didSet {
+            if selectedConstructorID == nil || !constructorStandings.contains(where: { $0.id == selectedConstructorID }) {
+                selectedConstructorID = constructorStandings.first?.id
+            }
+        }
+    }
 
     var isLoadingSchedule = false
     var isLoadingDrivers = false

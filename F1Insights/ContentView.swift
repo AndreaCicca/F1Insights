@@ -3,29 +3,12 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AppState.self) private var state
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-
-    // Selection per content type (by id). Reset when the season changes.
-    @State private var raceID: String?
-    @State private var driverID: String?
-    @State private var constructorID: String?
-
-    @State private var isUpdating = true
-    @State private var loadingStartTime: Date?
-    @State private var dismissTask: Task<Void, Never>?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var compactTab: SidebarItem = .schedule
 
-    private func activeID<T: Identifiable>(for storedID: String?, in items: [T]) -> String? where T.ID == String {
-        if let storedID, items.contains(where: { $0.id == storedID }) {
-            return storedID
-        }
-        return items.first?.id
-    }
-
-    private func selectionBinding<T: Identifiable>(for storedID: Binding<String?>, in items: [T]) -> Binding<String?> where T.ID == String {
+    private var tabSelection: Binding<SidebarItem> {
         Binding(
-            get: { activeID(for: storedID.wrappedValue, in: items) },
-            set: { storedID.wrappedValue = $0 }
+            get: { state.selection ?? .schedule },
+            set: { state.selection = $0 }
         )
     }
 
@@ -41,20 +24,13 @@ struct ContentView: View {
             regularSplitView
             #endif
         }
-        .onChange(of: state.season) {
-            raceID = nil
-            driverID = nil
-            constructorID = nil
-        }
-        .onChange(of: state.isAnyLoading) {
-            handleLoadingStateChange(state.isAnyLoading)
-        }
     }
 
     private var compactTabView: some View {
-        TabView(selection: $compactTab) {
+        @Bindable var state = state
+        return TabView(selection: tabSelection) {
             NavigationStack {
-                RaceListColumn(selection: $raceID, isCompactStack: true)
+                RaceListColumn(selection: $state.selectedRaceID, isCompactStack: true)
                     .navigationDestination(for: Race.self) { race in
                         RaceDetailView(race: race)
                             .id(race.id)
@@ -66,7 +42,7 @@ struct ContentView: View {
             .tag(SidebarItem.schedule)
 
             NavigationStack {
-                DriverRankColumn(selection: $driverID, isCompactStack: true)
+                DriverRankColumn(selection: $state.selectedDriverID, isCompactStack: true)
                     .navigationDestination(for: DriverStanding.self) { standing in
                         DriverStandingDetail(standing: standing, all: state.driverStandings)
                     }
@@ -77,7 +53,7 @@ struct ContentView: View {
             .tag(SidebarItem.driverStandings)
 
             NavigationStack {
-                ConstructorRankColumn(selection: $constructorID, isCompactStack: true)
+                ConstructorRankColumn(selection: $state.selectedConstructorID, isCompactStack: true)
                     .navigationDestination(for: ConstructorStanding.self) { standing in
                         ConstructorStandingDetail(standing: standing, all: state.constructorStandings)
                     }
@@ -90,8 +66,9 @@ struct ContentView: View {
     }
 
     private var regularSplitView: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            sidebar
+        @Bindable var state = state
+        return NavigationSplitView(columnVisibility: $columnVisibility) {
+            SidebarView(state: state)
                 .navigationSplitViewColumnWidth(min: 220, ideal: 250, max: 300)
         } content: {
             contentColumn
@@ -100,59 +77,86 @@ struct ContentView: View {
             detailColumn
         }
         .navigationTitle("F1 Insights")
-        #if os(macOS)
-        .navigationSubtitle(isUpdating ? "Updating season data…" : "\(String(state.season)) FIA Formula One World Championship™")
-        #endif
+        .platformSubtitle(state.isAnyLoading ? "Updating season data…" : "\(String(state.season)) FIA Formula One World Championship™")
         .toolbar {
             ToolbarItem(placement: .navigation) {
                 Button {
                     Task { await state.loadInitial(forceRefresh: true) }
                 } label: {
-                    if isUpdating {
+                    if state.isAnyLoading {
                         ProgressView().controlSize(.small)
                     } else {
                         Image(systemName: "arrow.clockwise")
                     }
                 }
-                .help(isUpdating ? "Updating season data…" : "Refresh season data (⌘R)")
+                .help(state.isAnyLoading ? "Updating season data…" : "Refresh season data (⌘R)")
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(state.isAnyLoading || isUpdating)
+                .disabled(state.isAnyLoading)
             }
         }
     }
 
-    private func handleLoadingStateChange(_ isLoading: Bool) {
-        if isLoading {
-            dismissTask?.cancel()
-            loadingStartTime = Date()
-            withAnimation(.easeInOut(duration: 0.2)) {
-                isUpdating = true
-            }
-        } else {
-            let elapsed = Date().timeIntervalSince(loadingStartTime ?? .distantPast)
-            // If satisfied from local cache (< 120ms), dismiss immediately without artificial wait
-            let minWait = elapsed < 0.12 ? 0.0 : 0.85
-            let remaining = max(0, minWait - elapsed)
+    // MARK: Content (column 2)
 
-            dismissTask?.cancel()
-            dismissTask = Task {
-                if remaining > 0 {
-                    try? await Task.sleep(for: .seconds(remaining))
-                }
-                if !Task.isCancelled {
-                    withAnimation(.easeInOut(duration: 0.25)) {
-                        isUpdating = false
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: Sidebar (column 1)
-
-    private var sidebar: some View {
+    @ViewBuilder
+    private var contentColumn: some View {
         @Bindable var state = state
-        return VStack(spacing: 0) {
+        switch state.selection {
+        case .schedule, .none:
+            RaceListColumn(selection: $state.selectedRaceID, isCompactStack: false)
+        case .driverStandings:
+            DriverRankColumn(selection: $state.selectedDriverID, isCompactStack: false)
+        case .constructorStandings:
+            ConstructorRankColumn(selection: $state.selectedConstructorID, isCompactStack: false)
+        }
+    }
+
+    // MARK: Detail (column 3)
+
+    @ViewBuilder
+    private var detailColumn: some View {
+        switch state.selection {
+        case .schedule, .none:
+            if let race = state.selectedRace {
+                RaceDetailView(race: race)
+            } else {
+                MessageView(
+                    systemImage: "flag.checkered",
+                    title: "Select a Grand Prix",
+                    subtitle: "Pick a race from the calendar to view results, telemetry and replay."
+                )
+            }
+        case .driverStandings:
+            if let s = state.selectedDriverStanding {
+                DriverStandingDetail(standing: s, all: state.driverStandings)
+            } else {
+                MessageView(
+                    systemImage: "person.2",
+                    title: "Select a Driver",
+                    subtitle: "Pick a driver from the standings to view statistics."
+                )
+            }
+        case .constructorStandings:
+            if let s = state.selectedConstructorStanding {
+                ConstructorStandingDetail(standing: s, all: state.constructorStandings)
+            } else {
+                MessageView(
+                    systemImage: "car.2",
+                    title: "Select a Constructor",
+                    subtitle: "Pick a constructor to view team results and points."
+                )
+            }
+        }
+    }
+}
+
+// MARK: - Sidebar (column 1)
+
+private struct SidebarView: View {
+    @Bindable var state: AppState
+
+    var body: some View {
+        VStack(spacing: 0) {
             SeasonHeader(season: $state.season, seasons: state.availableSeasons)
                 .padding(.horizontal, 10)
                 .padding(.top, 10)
@@ -175,64 +179,8 @@ struct ContentView: View {
             .listStyle(.sidebar)
         }
     }
-
-    // MARK: Content (column 2)
-
-    @ViewBuilder
-    private var contentColumn: some View {
-        switch state.selection {
-        case .schedule, .none:
-            RaceListColumn(selection: selectionBinding(for: $raceID, in: state.races), isCompactStack: false)
-        case .driverStandings:
-            DriverRankColumn(selection: selectionBinding(for: $driverID, in: state.driverStandings), isCompactStack: false)
-        case .constructorStandings:
-            ConstructorRankColumn(selection: selectionBinding(for: $constructorID, in: state.constructorStandings), isCompactStack: false)
-        }
-    }
-
-    // MARK: Detail (column 3)
-
-    @ViewBuilder
-    private var detailColumn: some View {
-        switch state.selection {
-        case .schedule, .none:
-            let id = activeID(for: raceID, in: state.races)
-            if let race = state.races.first(where: { $0.id == id }) {
-                RaceDetailView(race: race)
-            } else {
-                MessageView(
-                    systemImage: "flag.checkered",
-                    title: "Select a Grand Prix",
-                    subtitle: "Pick a race from the calendar to view results, telemetry and replay."
-                )
-            }
-        case .driverStandings:
-            let id = activeID(for: driverID, in: state.driverStandings)
-            if let s = state.driverStandings.first(where: { $0.id == id }) {
-                DriverStandingDetail(standing: s, all: state.driverStandings)
-            } else {
-                MessageView(
-                    systemImage: "person.2",
-                    title: "Select a Driver",
-                    subtitle: "Pick a driver from the standings to view statistics."
-                )
-            }
-        case .constructorStandings:
-            let id = activeID(for: constructorID, in: state.constructorStandings)
-            if let s = state.constructorStandings.first(where: { $0.id == id }) {
-                ConstructorStandingDetail(standing: s, all: state.constructorStandings)
-            } else {
-                MessageView(
-                    systemImage: "car.2",
-                    title: "Select a Constructor",
-                    subtitle: "Pick a constructor to view team results and points."
-                )
-            }
-        }
-    }
 }
 
 #Preview {
     ContentView().environment(AppState())
 }
-

@@ -2,6 +2,15 @@ import SwiftUI
 
 // MARK: - Race replay (shader-embellished lap-by-lap position animation)
 
+struct ReplayTrack: Identifiable {
+    let id: String
+    let name: String
+    let color: Color
+    let byLap: [Int: Int]        // lap -> position
+    let laps: [Int]              // sorted lap numbers with data
+    let pitLaps: Set<Int>
+}
+
 /// Animated lap-by-lap position replay. Each driver is a glowing comet trace
 /// that draws forward as the race plays; a leading pulse + code label marks the
 /// car's current position, and a live leaderboard tracks the running order.
@@ -27,78 +36,12 @@ struct RaceReplayView: View {
     @State private var speed: Double = 3          // laps per second
     @State private var isInitialLoad = true
 
-    // MARK: Derived data
-
-    private struct Track: Identifiable {
-        let id: String
-        let name: String
-        let color: Color
-        let byLap: [Int: Int]        // lap -> position
-        let laps: [Int]              // sorted lap numbers with data
-        let pitLaps: Set<Int>
-    }
-
-    private var metas: [DriverMeta] {
-        let fromResults = driverMetas(from: results)
-        if !fromResults.isEmpty { return fromResults }
-        guard let firstLap = laps.first else { return [] }
-        return firstLap.timings.enumerated().map { idx, t in
-            DriverMeta(id: t.driverId, name: t.driverId.capitalized, constructorId: t.driverId, finishPosition: idx + 1)
-        }
-    }
-
-    private var teamOf: [String: String] {
-        Dictionary(results.map { ($0.driver.driverId, $0.constructor.constructorId) },
-                   uniquingKeysWith: { a, _ in a })
-    }
-    private var nameOf: [String: String] {
-        Dictionary(results.map { ($0.driver.driverId, $0.driver.displayName) },
-                   uniquingKeysWith: { a, _ in a })
-    }
-    private var pitLapsOf: [String: Set<Int>] {
-        var out: [String: Set<Int>] = [:]
-        for p in pitStops { if let n = Int(p.lap) { out[p.driverId, default: []].insert(n) } }
-        return out
-    }
-
-    private var tracks: [Track] {
-        var byDriver: [String: [Int: Int]] = [:]
-        for l in laps {
-            guard let n = Int(l.number) else { continue }
-            for t in l.timings {
-                guard let p = Int(t.position) else { continue }
-                byDriver[t.driverId, default: [:]][n] = p
-            }
-        }
-        return byDriver.compactMap { id, byLap -> Track? in
-            guard selected.contains(id) else { return nil }
-            return Track(id: id,
-                         name: nameOf[id] ?? id.capitalized,
-                         color: TeamColor.color(for: teamOf[id] ?? id),
-                         byLap: byLap,
-                         laps: byLap.keys.sorted(),
-                         pitLaps: pitLapsOf[id] ?? [])
-        }
-    }
-
-    private var maxLap: Int { laps.compactMap { Int($0.number) }.max() ?? 1 }
-    private var maxPos: Int {
-        laps.flatMap { $0.timings }.compactMap { Int($0.position) }.max() ?? 20
-    }
-
-    /// Running order at the current (floored) lap: (position, track).
-    private var leaderboard: [(pos: Int, track: Track)] {
-        let L = min(maxLap, max(1, Int(lap.rounded(.down))))
-        return tracks.compactMap { tr -> (Int, Track)? in
-            if let p = tr.byLap[L] { return (p, tr) }
-            if let prior = tr.laps.filter({ $0 <= L }).last, let p = tr.byLap[prior] { return (p, tr) }
-            return nil
-        }
-        .sorted { $0.0 < $1.0 }
-        .map { (pos: $0.0, track: $0.1) }
-    }
-
-    // MARK: Body
+    // Precomputed race data (cached to prevent 60 FPS recalculation bottlenecks)
+    @State private var metas: [DriverMeta] = []
+    @State private var allTracks: [ReplayTrack] = []
+    @State private var tracks: [ReplayTrack] = []
+    @State private var maxLap: Int = 1
+    @State private var maxPos: Int = 20
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -113,34 +56,35 @@ struct RaceReplayView: View {
                     ScrollView(.vertical) {
                         VStack(alignment: .leading, spacing: 10) {
                             DriverPicker(metas: metas, selected: $selected)
-                            canvas
+                            ReplayCanvasView(tracks: tracks, lap: lap, maxLap: maxLap, maxPos: maxPos)
                                 .frame(height: 190)
-                            compactLeaderboard
+                            ReplayLeaderboardView(tracks: tracks, lap: lap, maxLap: maxLap, isCompact: true)
                         }
                         .padding(.bottom, 4)
                     }
                     .scrollIndicators(.hidden)
-                    transportBar(forceCompact: true)
+                    transportBar
                 }
             } else {
                 VStack(alignment: .leading, spacing: 12) {
                     DriverPicker(metas: metas, selected: $selected)
                     HStack(alignment: .top, spacing: 12) {
-                        canvas
-                        leaderboardColumn
+                        ReplayCanvasView(tracks: tracks, lap: lap, maxLap: maxLap, maxPos: maxPos)
+                        ReplayLeaderboardView(tracks: tracks, lap: lap, maxLap: maxLap, isCompact: false)
                     }
-                    transportBar(forceCompact: false)
+                    transportBar
                 }
             }
         }
         .task {
-            seed()
+            rebuildStaticData()
             await load()
-            seed()
+            rebuildStaticData()
             isInitialLoad = false
         }
-        .onChange(of: results.count) { _, _ in seed() }
-        .onChange(of: laps.count) { _, _ in seed() }
+        .onChange(of: results.count) { _, _ in rebuildStaticData() }
+        .onChange(of: laps.count) { _, _ in rebuildStaticData() }
+        .onChange(of: selected) { _, _ in filterActiveTracks() }
         .task(id: playing) {
             guard playing else { return }
             let clock = ContinuousClock()
@@ -158,7 +102,7 @@ struct RaceReplayView: View {
         }
     }
 
-    private func transportBar(forceCompact: Bool) -> some View {
+    private var transportBar: some View {
         PlaybackTransportBar(
             isPlaying: playing,
             progressText: "LAP \(Int(lap.rounded())) / \(maxLap)",
@@ -166,7 +110,6 @@ struct RaceReplayView: View {
             range: 1...Double(max(maxLap, 1)),
             speed: $speed,
             speedOptions: [1.0, 2.0, 4.0, 8.0],
-            forceCompact: forceCompact,
             onRestart: { lap = 1 },
             onTogglePlay: {
                 if lap >= Double(maxLap) { lap = 1 }
@@ -177,12 +120,86 @@ struct RaceReplayView: View {
         )
     }
 
-    // MARK: Canvas (glow + sharp, composited in a drawingGroup)
+    private func filterActiveTracks() {
+        tracks = allTracks.filter { selected.contains($0.id) }
+    }
 
-    private var canvas: some View {
+    private func rebuildStaticData() {
+        // Compute metas
+        let fromResults = driverMetas(from: results)
+        if !fromResults.isEmpty {
+            metas = fromResults
+        } else if let firstLap = laps.first {
+            metas = firstLap.timings.enumerated().map { idx, t in
+                DriverMeta(id: t.driverId, name: t.driverId.capitalized, constructorId: t.driverId, finishPosition: idx + 1)
+            }
+        } else {
+            metas = []
+        }
+
+        // Compute maps
+        let teamOf: [String: String] = Dictionary(
+            results.map { ($0.driver.driverId, $0.constructor.constructorId) },
+            uniquingKeysWith: { a, _ in a }
+        )
+        let nameOf: [String: String] = Dictionary(
+            results.map { ($0.driver.driverId, $0.driver.displayName) },
+            uniquingKeysWith: { a, _ in a }
+        )
+        var pitLapsOf: [String: Set<Int>] = [:]
+        for p in pitStops {
+            if let n = Int(p.lap) {
+                pitLapsOf[p.driverId, default: []].insert(n)
+            }
+        }
+
+        var byDriver: [String: [Int: Int]] = [:]
+        for l in laps {
+            guard let n = Int(l.number) else { continue }
+            for t in l.timings {
+                guard let p = Int(t.position) else { continue }
+                byDriver[t.driverId, default: [:]][n] = p
+            }
+        }
+
+        allTracks = byDriver.map { id, byLap in
+            ReplayTrack(
+                id: id,
+                name: nameOf[id] ?? id.capitalized,
+                color: TeamColor.color(for: teamOf[id] ?? id),
+                byLap: byLap,
+                laps: byLap.keys.sorted(),
+                pitLaps: pitLapsOf[id] ?? []
+            )
+        }
+
+        maxLap = laps.compactMap { Int($0.number) }.max() ?? 1
+        maxPos = laps.flatMap { $0.timings }.compactMap { Int($0.position) }.max() ?? 20
+
+        if selected.isEmpty {
+            if !results.isEmpty {
+                selected = Set(results.map { $0.driver.driverId })
+            } else if let firstLap = laps.first {
+                selected = Set(firstLap.timings.map(\.driverId))
+            }
+        }
+
+        filterActiveTracks()
+    }
+}
+
+// MARK: - Replay Canvas View (Isolated invalidation boundary for 60 FPS drawing)
+
+private struct ReplayCanvasView: View {
+    let tracks: [ReplayTrack]
+    let lap: Double
+    let maxLap: Int
+    let maxPos: Int
+
+    var body: some View {
         let mp = max(maxPos, 2)
         let ml = max(maxLap, 2)
-        return ZStack {
+        ZStack {
             // Animated shader backdrop (colorEffect path — stable).
             TimelineView(.animation) { ctx in
                 let t = ctx.date.timeIntervalSince1970.truncatingRemainder(dividingBy: 3600)
@@ -200,15 +217,20 @@ struct RaceReplayView: View {
             .drawingGroup()      // Metal-backed offscreen composite
         }
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .overlay(
+        .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(.white.opacity(0.08), lineWidth: 1)
-        )
+        }
         .frame(minWidth: 240, minHeight: 190)
     }
 
-    private func draw(in context: GraphicsContext, size: CGSize,
-                      maxPos: Int, maxLap: Int, glow: Bool) {
+    private func draw(
+        in context: GraphicsContext,
+        size: CGSize,
+        maxPos: Int,
+        maxLap: Int,
+        glow: Bool
+    ) {
         let padL: CGFloat = 38, padR: CGFloat = 58, padV: CGFloat = 24
         let plotW = size.width - padL - padR
         let plotH = size.height - padV * 2
@@ -289,7 +311,7 @@ struct RaceReplayView: View {
     }
 
     /// Interpolated (lap, position) at a fractional lap for smooth motion.
-    private func position(of tr: Track, at l: Double) -> (lap: Double, pos: Double)? {
+    private func position(of tr: ReplayTrack, at l: Double) -> (lap: Double, pos: Double)? {
         guard let first = tr.laps.first, Double(first) <= l else { return nil }
         let lo = Int(l.rounded(.down)), hi = lo + 1
         guard let pLo = tr.byLap[lo] else {
@@ -300,12 +322,42 @@ struct RaceReplayView: View {
         if let pHi = tr.byLap[hi] { return (l, Double(pLo) + (Double(pHi) - Double(pLo)) * frac) }
         return (l, Double(pLo))
     }
+}
 
-    // MARK: Live leaderboard (iPad / Mac sidebar column)
+// MARK: - Replay Leaderboard View
 
-    private var leaderboardColumn: some View {
+private struct ReplayLeaderboardView: View {
+    let tracks: [ReplayTrack]
+    let lap: Double
+    let maxLap: Int
+    let isCompact: Bool
+
+    private var leaderboard: [(pos: Int, track: ReplayTrack)] {
+        let currentLap = min(maxLap, max(1, Int(lap.rounded(.down))))
+        return tracks.compactMap { tr -> (Int, ReplayTrack)? in
+            if let p = tr.byLap[currentLap] { return (p, tr) }
+            if let prior = tr.laps.filter({ $0 <= currentLap }).last, let p = tr.byLap[prior] { return (p, tr) }
+            return nil
+        }
+        .sorted { $0.0 < $1.0 }
+        .map { (pos: $0.0, track: $0.1) }
+    }
+
+    private var currentLapNumber: Int {
+        min(maxLap, max(1, Int(lap.rounded())))
+    }
+
+    var body: some View {
+        if isCompact {
+            compactLayout
+        } else {
+            regularLayout
+        }
+    }
+
+    private var regularLayout: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("ORDER · LAP \(min(maxLap, max(1, Int(lap.rounded()))))")
+            Text("ORDER · LAP \(currentLapNumber)")
                 .font(.system(size: 12, weight: .heavy)).tracking(1)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 2)
@@ -327,11 +379,9 @@ struct RaceReplayView: View {
         .animation(.easeInOut(duration: 0.25), value: leaderboard.map(\.track.id))
     }
 
-    // MARK: Compact Leaderboard (iPhone horizontal chips)
-
-    private var compactLeaderboard: some View {
+    private var compactLayout: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("ORDER · LAP \(min(maxLap, max(1, Int(lap.rounded()))))")
+            Text("ORDER · LAP \(currentLapNumber)")
                 .font(.system(size: 11, weight: .heavy)).tracking(1)
                 .foregroundStyle(.secondary)
 
@@ -355,15 +405,6 @@ struct RaceReplayView: View {
                 }
             }
             .scrollIndicators(.hidden)
-        }
-    }
-
-    private func seed() {
-        guard selected.isEmpty else { return }
-        if !results.isEmpty {
-            selected = Set(results.map { $0.driver.driverId })
-        } else if let firstLap = laps.first {
-            selected = Set(firstLap.timings.map(\.driverId))
         }
     }
 }

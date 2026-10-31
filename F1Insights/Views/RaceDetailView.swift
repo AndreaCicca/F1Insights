@@ -195,8 +195,7 @@ struct RaceDetailView: View {
                 race: race,
                 results: model.results,
                 loadingResults: model.loadingResults,
-                isSlimCompact: horizontalSizeClass == .compact && (tab == .replay || tab == .trackMap),
-                isCompact: horizontalSizeClass == .compact
+                isSlimCompact: horizontalSizeClass == .compact && (tab == .replay || tab == .trackMap)
             )
 
             SegmentedTabBar(selection: $tab)
@@ -216,9 +215,7 @@ struct RaceDetailView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        #if os(macOS)
-        .navigationSubtitle("\(race.circuit.circuitName) · Round \(race.round)")
-        #endif
+        .platformSubtitle("\(race.circuit.circuitName) · Round \(race.round)")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 Button {
@@ -241,22 +238,14 @@ struct RaceDetailView: View {
                         showInspector.toggle()
                     }
                 } label: {
-                    if horizontalSizeClass == .compact {
-                        Label("Info", systemImage: showInspector ? "info.circle.fill" : "info.circle")
-                    } else {
-                        Label("Inspector", systemImage: "sidebar.trailing")
-                    }
+                    Label("Circuit Info", systemImage: "info.circle")
                 }
-                .help(horizontalSizeClass == .compact ? "Dettagli circuito ed evento" : "Toggle Circuit Inspector (⌥⌘I)")
+                .help("Circuit & Event Details (⌥⌘I)")
                 .keyboardShortcut("i", modifiers: [.command, .option])
             }
         }
-        .inspector(isPresented: $showInspector) {
+        .sheet(isPresented: $showInspector) {
             CircuitInspectorView(race: race, results: model.results)
-                #if os(iOS)
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-                #endif
         }
         .task(id: race.id) { await model.loadCore(year: year, round: round, raceID: race.id) }
     }
@@ -311,15 +300,10 @@ private struct RaceSummaryHeader: View {
     let results: [RaceResult]
     let loadingResults: Bool
     let isSlimCompact: Bool
-    let isCompact: Bool
 
     var body: some View {
         if isSlimCompact {
             slimBanner
-        } else if isCompact {
-            stackedCard
-                .padding(12)
-                .cardStyle()
         } else {
             ViewThatFits(in: .horizontal) {
                 HStack(alignment: .center, spacing: 16) {
@@ -402,7 +386,7 @@ private struct RaceSummaryHeader: View {
                 }
 
                 if results.isEmpty && !loadingResults {
-                    Text("NON DISPUTATO")
+                    Text("UPCOMING")
                         .font(.system(size: 8, weight: .bold))
                         .tracking(0.6)
                         .foregroundStyle(.secondary)
@@ -583,107 +567,102 @@ private struct ResultsTab: View {
         if loading && results.isEmpty {
             LoadingView(label: "Loading results…")
         } else if results.isEmpty {
-            MessageView(systemImage: "calendar.badge.clock", title: "Gara non ancora disputata",
-                        subtitle: "I risultati saranno disponibili al termine del Gran Premio.")
-        } else if horizontalSizeClass == .compact {
-            List(sortedResults) { r in
-                RaceResultCompactRow(result: r, race: race)
-            }
-            .listStyle(.plain)
+            MessageView(systemImage: "calendar.badge.clock", title: "Race not yet held",
+                        subtitle: "Results will be available once the Grand Prix has taken place.")
         } else {
-            regularResultsTable
-        }
-    }
-
-    private var regularResultsTable: some View {
-        Table(sortedResults, sortOrder: $sortOrder) {
-            TableColumn("Pos", value: \.positionInt) { r in
-                Podium.Pill(text: r.positionText, position: r.positionInt)
-            }
-            .width(min: 36, ideal: 44, max: 56)
-
-            TableColumn("Driver", value: \.driver.familyName) { r in
-                TeamDotLabel(
-                    title: r.driver.fullName,
-                    teamId: r.constructor.constructorId,
-                    subtitle: r.driver.code
-                )
-                .contextMenu {
-                    Button {
-                        PlatformServices.openWikipedia(query: "\(r.driver.fullName) Formula One")
-                    } label: {
-                        Label("Driver on Wikipedia", systemImage: "book.pages")
-                    }
-
-                    Divider()
-
-                    Button {
-                        let md = PlatformServices.generateMarkdownTable(race: race, results: sortedResults)
-                        PlatformServices.copyToPasteboard(md)
-                    } label: {
-                        Label("Copy Full Table as Markdown", systemImage: "tablecells")
-                    }
-
-                    Button {
-                        let csv = PlatformServices.generateCSV(race: race, results: sortedResults)
-                        PlatformServices.copyToPasteboard(csv)
-                    } label: {
-                        Label("Copy Full Table as CSV", systemImage: "doc.plaintext")
+            Table(sortedResults, sortOrder: $sortOrder) {
+                TableColumn("Pos", value: \.positionInt) { r in
+                    if horizontalSizeClass == .compact {
+                        RaceResultCompactRow(result: r, race: race)
+                    } else {
+                        Podium.Pill(text: r.positionText, position: r.positionInt)
                     }
                 }
-            }
-            .width(min: 110, ideal: 160)
+                .width(min: 36, ideal: 44, max: horizontalSizeClass == .compact ? nil : 56)
 
-            TableColumn("Team", value: \.constructor.name) { r in
-                Text(r.constructor.name)
-                    .foregroundStyle(.secondary)
-            }
-            .width(min: 80, ideal: 120)
-
-            TableColumn("Grid", value: \.gridInt) { r in
-                HStack(spacing: 4) {
-                    Text(r.grid ?? "—")
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
-
-                    if let delta = r.gridDelta, delta != 0 {
-                        let color: Color = delta > 0 ? .green : .red
-                        HStack(spacing: 1) {
-                            Image(systemName: delta > 0 ? "arrow.up" : "arrow.down")
-                                .font(.system(size: 8, weight: .bold))
-                            Text("\(abs(delta))")
-                                .font(.caption2.monospacedDigit().weight(.semibold))
+                TableColumn("Driver", value: \.driver.familyName) { r in
+                    TeamDotLabel(
+                        title: r.driver.fullName,
+                        teamId: r.constructor.constructorId,
+                        subtitle: r.driver.code
+                    )
+                    .contextMenu {
+                        Button {
+                            PlatformServices.openWikipedia(query: "\(r.driver.fullName) Formula One")
+                        } label: {
+                            Label("Driver on Wikipedia", systemImage: "book.pages")
                         }
-                        .foregroundStyle(color)
+
+                        Divider()
+
+                        Button {
+                            let md = PlatformServices.generateMarkdownTable(race: race, results: sortedResults)
+                            PlatformServices.copyToPasteboard(md)
+                        } label: {
+                            Label("Copy Full Table as Markdown", systemImage: "tablecells")
+                        }
+
+                        Button {
+                            let csv = PlatformServices.generateCSV(race: race, results: sortedResults)
+                            PlatformServices.copyToPasteboard(csv)
+                        } label: {
+                            Label("Copy Full Table as CSV", systemImage: "doc.plaintext")
+                        }
                     }
                 }
-            }
-            .width(min: 44, ideal: 60)
+                .width(min: 110, ideal: 160)
 
-            TableColumn("Time / Status") { r in
-                if let time = r.time?.time {
-                    Text(time)
-                        .font(.callout.monospacedDigit().weight(.medium))
-                } else {
-                    let dnf = r.isDNF
-                    Text(r.status)
-                        .font(.caption.weight(dnf ? .semibold : .regular))
-                        .foregroundStyle(dnf ? Color.red.opacity(0.9) : Color.secondary)
-                        .padding(.horizontal, dnf ? 6 : 0)
-                        .padding(.vertical, dnf ? 2 : 0)
-                        .background(dnf ? Color.red.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+                TableColumn("Team", value: \.constructor.name) { r in
+                    Text(r.constructor.name)
+                        .foregroundStyle(.secondary)
                 }
-            }
-            .width(min: 85, ideal: 115)
+                .width(min: 80, ideal: 120)
 
-            TableColumn("Pts", value: \.pointsDouble) { r in
-                Text(r.points)
-                    .font(.callout.monospacedDigit().weight(.bold))
-                    .foregroundStyle(r.pointsDouble > 0 ? Color.primary : Color.secondary)
+                TableColumn("Grid", value: \.gridInt) { r in
+                    HStack(spacing: 4) {
+                        Text(r.grid ?? "—")
+                            .font(.callout.monospacedDigit())
+                            .foregroundStyle(.secondary)
+
+                        if let delta = r.gridDelta, delta != 0 {
+                            let color: Color = delta > 0 ? .green : .red
+                            HStack(spacing: 1) {
+                                Image(systemName: delta > 0 ? "arrow.up" : "arrow.down")
+                                    .font(.system(size: 8, weight: .bold))
+                                Text("\(abs(delta))")
+                                    .font(.caption2.monospacedDigit().weight(.semibold))
+                            }
+                            .foregroundStyle(color)
+                        }
+                    }
+                }
+                .width(min: 44, ideal: 60)
+
+                TableColumn("Time / Status") { r in
+                    if let time = r.time?.time {
+                        Text(time)
+                            .font(.callout.monospacedDigit().weight(.medium))
+                    } else {
+                        let dnf = r.isDNF
+                        Text(r.status)
+                            .font(.caption.weight(dnf ? .semibold : .regular))
+                            .foregroundStyle(dnf ? Color.red.opacity(0.9) : Color.secondary)
+                            .padding(.horizontal, dnf ? 6 : 0)
+                            .padding(.vertical, dnf ? 2 : 0)
+                            .background(dnf ? Color.red.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 4))
+                    }
+                }
+                .width(min: 85, ideal: 115)
+
+                TableColumn("Pts", value: \.pointsDouble) { r in
+                    Text(r.points)
+                        .font(.callout.monospacedDigit().weight(.bold))
+                        .foregroundStyle(r.pointsDouble > 0 ? Color.primary : Color.secondary)
+                }
+                .width(min: 36, ideal: 46, max: 56)
             }
-            .width(min: 36, ideal: 46, max: 56)
+            .f1TableStyle()
         }
-        .f1TableStyle()
     }
 }
 
@@ -770,64 +749,59 @@ private struct QualifyingTab: View {
             if (loading || isInitialLoad) && results.isEmpty {
                 LoadingView(label: "Loading qualifying…")
             } else if results.isEmpty {
-                MessageView(systemImage: "stopwatch", title: "Qualifiche non ancora disputate",
-                            subtitle: "I tempi di qualifica saranno disponibili al termine della sessione.")
-            } else if horizontalSizeClass == .compact {
-                List(sortedResults) { r in
-                    QualifyingCompactRow(result: r)
-                }
-                .listStyle(.plain)
+                MessageView(systemImage: "stopwatch", title: "Qualifying not yet held",
+                            subtitle: "Qualifying lap times will be available once the session concludes.")
             } else {
-                regularQualifyingTable
+                Table(sortedResults, sortOrder: $sortOrder) {
+                    TableColumn("Pos", value: \.positionInt) { r in
+                        if horizontalSizeClass == .compact {
+                            QualifyingCompactRow(result: r)
+                        } else {
+                            QualifyingPositionBadge(result: r)
+                        }
+                    }
+                    .width(min: 36, ideal: 44, max: horizontalSizeClass == .compact ? nil : 56)
+
+                    TableColumn("Driver", value: \.driver.familyName) { r in
+                        TeamDotLabel(
+                            title: r.driver.fullName,
+                            teamId: r.constructor.constructorId,
+                            subtitle: r.driver.code
+                        )
+                        .contextMenu {
+                            qualifyingContextMenu(for: r)
+                        }
+                    }
+                    .width(min: 110, ideal: 160)
+
+                    TableColumn("Team", value: \.constructor.name) { r in
+                        Text(r.constructor.name)
+                            .foregroundStyle(.secondary)
+                    }
+                    .width(min: 80, ideal: 120)
+
+                    TableColumn("Q1") { r in
+                        sessionTimeCell(r.q1)
+                    }
+                    .width(min: 60, ideal: 75)
+
+                    TableColumn("Q2") { r in
+                        sessionTimeCell(r.q2)
+                    }
+                    .width(min: 60, ideal: 75)
+
+                    TableColumn("Q3") { r in
+                        sessionTimeCell(r.q3, isPole: r.positionInt == 1)
+                    }
+                    .width(min: 60, ideal: 75)
+                }
+                .f1TableStyle()
             }
         }
         .task {
             await load()
             isInitialLoad = false
         }
-    }
-
-    private var regularQualifyingTable: some View {
-        Table(sortedResults, sortOrder: $sortOrder) {
-            TableColumn("Pos", value: \.positionInt) { r in
-                QualifyingPositionBadge(result: r)
-            }
-            .width(min: 36, ideal: 44, max: 56)
-
-            TableColumn("Driver", value: \.driver.familyName) { r in
-                TeamDotLabel(
-                    title: r.driver.fullName,
-                    teamId: r.constructor.constructorId,
-                    subtitle: r.driver.code
-                )
-                .contextMenu {
-                    qualifyingContextMenu(for: r)
-                }
-            }
-            .width(min: 110, ideal: 160)
-
-            TableColumn("Team", value: \.constructor.name) { r in
-                Text(r.constructor.name)
-                    .foregroundStyle(.secondary)
-            }
-            .width(min: 80, ideal: 120)
-
-            TableColumn("Q1") { r in
-                sessionTimeCell(r.q1)
-            }
-            .width(min: 60, ideal: 75)
-
-            TableColumn("Q2") { r in
-                sessionTimeCell(r.q2)
-            }
-            .width(min: 60, ideal: 75)
-
-            TableColumn("Q3") { r in
-                sessionTimeCell(r.q3, isPole: r.positionInt == 1)
-            }
-            .width(min: 60, ideal: 75)
-        }
-        .f1TableStyle()
     }
 
     private func sessionTimeCell(_ time: String?, isPole: Bool = false) -> some View {

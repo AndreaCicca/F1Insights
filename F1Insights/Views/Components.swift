@@ -251,20 +251,15 @@ struct PlaybackTransportBar: View {
     let range: ClosedRange<Double>
     @Binding var speed: Double
     let speedOptions: [Double]
-    var forceCompact: Bool = false
     let onRestart: () -> Void
     let onTogglePlay: () -> Void
     var onStepBackward: (() -> Void)? = nil
     var onStepForward: (() -> Void)? = nil
 
     var body: some View {
-        if forceCompact {
+        ViewThatFits(in: .horizontal) {
+            regularLayout
             compactLayout
-        } else {
-            ViewThatFits(in: .horizontal) {
-                regularLayout
-                compactLayout
-            }
         }
     }
 
@@ -400,17 +395,17 @@ extension View {
         borderColor: Color? = nil
     ) -> some View {
         self
-            .background(
+            .background {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .fill(.quaternary.opacity(fillOpacity))
-            )
-            .overlay(
+            }
+            .overlay {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(
                         borderColor.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.separator.opacity(0.4)),
                         lineWidth: borderColor != nil ? 1 : 0.5
                     )
-            )
+            }
     }
 
     /// Unified inset table style with alternating row backgrounds on macOS.

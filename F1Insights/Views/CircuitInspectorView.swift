@@ -1,69 +1,83 @@
 import SwiftUI
 
-/// Inspector panel view for Circuit & Grand Prix details.
-/// Adapts seamlessly between a macOS trailing inspector and an iOS modal sheet.
+/// Modern modal Sheet for Circuit & Grand Prix details.
+/// Features generous dimensions on macOS and detents on iOS/iPadOS.
 struct CircuitInspectorView: View {
     let race: Race
     let results: [RaceResult]
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var copiedMessage: String?
 
-    private var coordinatesText: String? {
-        guard let latStr = race.circuit.location.lat,
-              let lonStr = race.circuit.location.long,
-              let lat = Double(latStr),
-              let lon = Double(lonStr) else {
-            return nil
-        }
-        let latDir = lat >= 0 ? "N" : "S"
-        let lonDir = lon >= 0 ? "E" : "W"
-        return String(format: "%.4f° %@, %.4f° %@", abs(lat), latDir, abs(lon), lonDir)
-    }
-
-    private var winner: RaceResult? {
-        results.first
-    }
-
-    private var fastestLap: RaceResult? {
-        results.first(where: { $0.fastestLap?.rank == "1" })
-    }
-
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                inspectorCard { circuitProfileSection }
-                inspectorCard { raceOverviewSection }
-
-                if !results.isEmpty {
-                    inspectorCard { resultsSummarySection }
-                }
-
-                inspectorCard { exportSection }
-
-                if let message = copiedMessage {
-                    HStack(spacing: 8) {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                        Text(message)
-                            .font(.subheadline.weight(.medium))
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    InspectorCard {
+                        InspectorCircuitProfileSection(circuit: race.circuit)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 8)
-                    .background(.ultraThinMaterial, in: Capsule())
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+
+                    InspectorCard {
+                        InspectorRaceOverviewSection(
+                            round: race.round,
+                            season: race.season,
+                            startDate: race.startDate,
+                            laps: results.first?.laps
+                        )
+                    }
+
+                    if !results.isEmpty {
+                        InspectorCard {
+                            InspectorResultsSummarySection(
+                                winner: results.first,
+                                fastestLap: results.first(where: { $0.fastestLap?.rank == "1" })
+                            )
+                        }
+                    }
+
+                    InspectorCard {
+                        InspectorExportSection(
+                            race: race,
+                            results: results,
+                            onCopy: { message in
+                                withAnimation { copiedMessage = message }
+                            }
+                        )
+                    }
+
+                    if let message = copiedMessage {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Text(message)
+                                .font(.subheadline.weight(.medium))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    }
+                }
+                .padding(16)
+            }
+            .navigationTitle(race.circuit.circuitName)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") {
+                        dismiss()
+                    }
                 }
             }
-            .padding(16)
         }
-        .navigationTitle(race.circuit.circuitName)
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
         #if os(macOS)
-        .frame(minWidth: 260, idealWidth: 280)
+        .frame(minWidth: 460, idealWidth: 500, minHeight: 520, idealHeight: 580)
+        #else
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
         #endif
         .animation(.easeInOut(duration: 0.25), value: copiedMessage)
         .task(id: copiedMessage) {
@@ -75,38 +89,79 @@ struct CircuitInspectorView: View {
             }
         }
     }
+}
 
-    // MARK: - Card Container
+// MARK: - Card Container
 
-    private func inspectorCard<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+private struct InspectorCard<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 10, content: content)
             .padding(14)
             .frame(maxWidth: .infinity, alignment: .leading)
             .cardStyle()
     }
+}
 
-    private func sectionHeader(_ title: String, systemImage: String) -> some View {
+private struct InspectorSectionHeader: View {
+    let title: String
+    let systemImage: String
+
+    var body: some View {
         Label(title, systemImage: systemImage)
             .font(.system(size: 11, weight: .bold))
             .tracking(1)
             .foregroundStyle(.secondary)
     }
+}
 
-    // MARK: - Sections
+private struct InspectorRow: View {
+    let title: String
+    let value: String
 
-    private var circuitProfileSection: some View {
+    var body: some View {
+        HStack {
+            Text(title)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.subheadline.monospacedDigit().weight(.medium))
+        }
+    }
+}
+
+// MARK: - Circuit Profile Section
+
+private struct InspectorCircuitProfileSection: View {
+    let circuit: Circuit
+
+    private var coordinatesText: String? {
+        guard let latStr = circuit.location.lat,
+              let lonStr = circuit.location.long,
+              let lat = Double(latStr),
+              let lon = Double(lonStr) else {
+            return nil
+        }
+        let latDir = lat >= 0 ? "N" : "S"
+        let lonDir = lon >= 0 ? "E" : "W"
+        return String(format: "%.4f° %@, %.4f° %@", abs(lat), latDir, abs(lon), lonDir)
+    }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("CIRCUITO", systemImage: "flag.checkered")
+            InspectorSectionHeader(title: "CIRCUIT", systemImage: "flag.checkered")
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(race.circuit.circuitName)
+                Text(circuit.circuitName)
                     .font(.headline.weight(.bold))
 
                 HStack(spacing: 4) {
                     Image(systemName: "mappin.circle.fill")
                         .foregroundStyle(Color.accentColor)
                         .font(.caption)
-                    Text("\(race.circuit.location.locality ?? ""), \(race.circuit.location.country ?? "")")
+                    Text("\(circuit.location.locality ?? ""), \(circuit.location.country ?? "")")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
@@ -120,60 +175,83 @@ struct CircuitInspectorView: View {
             }
 
             VStack(spacing: 8) {
-                externalLinkButton("Apri in Apple Maps", systemImage: "map.fill", prominent: true) {
-                    PlatformServices.openInAppleMaps(circuit: race.circuit)
+                Button {
+                    PlatformServices.openInAppleMaps(circuit: circuit)
+                } label: {
+                    HStack {
+                        Image(systemName: "map.fill")
+                        Text("Open in Apple Maps")
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption2)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
 
-                externalLinkButton("Circuito su Wikipedia", systemImage: "book.pages", prominent: false) {
-                    PlatformServices.openWikipedia(query: "\(race.circuit.circuitName) circuit Formula One")
+                Button {
+                    PlatformServices.openWikipedia(query: "\(circuit.circuitName) circuit Formula One")
+                } label: {
+                    HStack {
+                        Image(systemName: "book.pages")
+                        Text("Circuit on Wikipedia")
+                        Spacer()
+                        Image(systemName: "arrow.up.right")
+                            .font(.caption2)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
             }
             .padding(.top, 4)
         }
     }
+}
 
-    private func externalLinkButton(_ title: String, systemImage: String, prominent: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack {
-                Image(systemName: systemImage)
-                Text(title)
-                Spacer()
-                Image(systemName: "arrow.up.right")
-                    .font(.caption2)
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(prominent ? AnyButtonStyle(.borderedProminent) : AnyButtonStyle(.bordered))
-        .controlSize(.regular)
-    }
+// MARK: - Race Overview Section
 
-    private var raceOverviewSection: some View {
+private struct InspectorRaceOverviewSection: View {
+    let round: String
+    let season: String
+    let startDate: Date?
+    let laps: String?
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("DETTAGLI EVENTO", systemImage: "info.circle")
+            InspectorSectionHeader(title: "EVENT DETAILS", systemImage: "info.circle")
 
             VStack(alignment: .leading, spacing: 10) {
-                inspectorRow(title: "Round", value: "Round \(race.round) (\(race.season))")
+                InspectorRow(title: "Round", value: "Round \(round) (\(season))")
 
-                if let date = race.startDate {
-                    inspectorRow(title: "Data Gara", value: date.formatted(date: .abbreviated, time: .omitted))
-                    inspectorRow(title: "Orario Locale", value: date.formatted(date: .omitted, time: .shortened))
+                if let date = startDate {
+                    InspectorRow(title: "Race Date", value: date.formatted(date: .abbreviated, time: .omitted))
+                    InspectorRow(title: "Local Time", value: date.formatted(date: .omitted, time: .shortened))
                 }
 
-                if let laps = results.first?.laps {
-                    inspectorRow(title: "Giri Previsti", value: "\(laps) giri")
+                if let laps {
+                    InspectorRow(title: "Scheduled Laps", value: "\(laps) laps")
                 }
             }
         }
     }
+}
 
-    private var resultsSummarySection: some View {
+// MARK: - Results Summary Section
+
+private struct InspectorResultsSummarySection: View {
+    let winner: RaceResult?
+    let fastestLap: RaceResult?
+
+    var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("HIGHLIGHT GARA", systemImage: "trophy")
+            InspectorSectionHeader(title: "RACE HIGHLIGHTS", systemImage: "trophy")
 
             VStack(alignment: .leading, spacing: 10) {
                 if let w = winner {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Vincitore")
+                        Text("Winner")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         HStack(spacing: 8) {
@@ -192,7 +270,7 @@ struct CircuitInspectorView: View {
                 if let fl = fastestLap,
                    let time = fl.fastestLap?.time?.time {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Giro Più Veloce")
+                        Text("Fastest Lap")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                         HStack(spacing: 8) {
@@ -211,64 +289,14 @@ struct CircuitInspectorView: View {
             }
         }
     }
+}
 
-    private var exportSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            sectionHeader("CONDIVISIONE ED ESPORTAZIONE", systemImage: "square.and.arrow.up")
+// MARK: - Export Section
 
-            VStack(spacing: 8) {
-                ShareLink(
-                    item: shareSummaryText,
-                    subject: Text(race.raceName),
-                    message: Text("Formula 1 \(race.season) - \(race.raceName)")
-                ) {
-                    Label("Condividi Gran Premio…", systemImage: "square.and.arrow.up")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.regular)
-
-                copyButton("Copia Riepilogo", systemImage: "doc.on.doc", toast: "Riepilogo copiato negli appunti") {
-                    shareSummaryText
-                }
-
-                if !results.isEmpty {
-                    copyButton("Copia Tabella Markdown", systemImage: "tablecells", toast: "Tabella Markdown copiata!") {
-                        PlatformServices.generateMarkdownTable(race: race, results: results)
-                    }
-
-                    copyButton("Copia come CSV (Excel / Numbers)", systemImage: "doc.plaintext", toast: "CSV copiato!") {
-                        PlatformServices.generateCSV(race: race, results: results)
-                    }
-                }
-            }
-        }
-    }
-
-    private func copyButton(_ title: String, systemImage: String, toast: String, content: @escaping () -> String) -> some View {
-        Button {
-            PlatformServices.copyToPasteboard(content())
-            withAnimation { copiedMessage = toast }
-        } label: {
-            Label(title, systemImage: systemImage)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(.bordered)
-        .controlSize(.regular)
-    }
-
-    // MARK: - Helpers
-
-    private func inspectorRow(title: String, value: String) -> some View {
-        HStack {
-            Text(title)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Spacer()
-            Text(value)
-                .font(.subheadline.monospacedDigit().weight(.medium))
-        }
-    }
+private struct InspectorExportSection: View {
+    let race: Race
+    let results: [RaceResult]
+    let onCopy: (String) -> Void
 
     private var shareSummaryText: String {
         var parts: [String] = []
@@ -277,24 +305,65 @@ struct CircuitInspectorView: View {
         if let d = race.startDate {
             parts.append("📅 \(d.formatted(date: .abbreviated, time: .shortened))")
         }
-        if let w = winner {
-            parts.append("🏆 Vincitore: \(w.driver.fullName) (\(w.constructor.name))")
+        if let w = results.first {
+            parts.append("🏆 Winner: \(w.driver.fullName) (\(w.constructor.name))")
         }
-        if let fl = fastestLap, let t = fl.fastestLap?.time?.time {
-            parts.append("⚡ Giro più veloce: \(fl.driver.fullName) (\(t))")
+        if let fl = results.first(where: { $0.fastestLap?.rank == "1" }), let t = fl.fastestLap?.time?.time {
+            parts.append("⚡ Fastest Lap: \(fl.driver.fullName) (\(t))")
         }
         return parts.joined(separator: "\n")
     }
-}
 
-private struct AnyButtonStyle: PrimitiveButtonStyle {
-    private let _makeBody: (Configuration) -> AnyView
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            InspectorSectionHeader(title: "SHARE & EXPORT", systemImage: "square.and.arrow.up")
 
-    init<S: PrimitiveButtonStyle>(_ style: S) {
-        _makeBody = { AnyView(style.makeBody(configuration: $0)) }
-    }
+            VStack(spacing: 8) {
+                ShareLink(
+                    item: shareSummaryText,
+                    subject: Text(race.raceName),
+                    message: Text("Formula 1 \(race.season) - \(race.raceName)")
+                ) {
+                    Label("Share Grand Prix…", systemImage: "square.and.arrow.up")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
 
-    func makeBody(configuration: Configuration) -> some View {
-        _makeBody(configuration)
+                Button {
+                    PlatformServices.copyToPasteboard(shareSummaryText)
+                    onCopy("Summary copied to pasteboard")
+                } label: {
+                    Label("Copy Summary", systemImage: "doc.on.doc")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+
+                if !results.isEmpty {
+                    Button {
+                        let md = PlatformServices.generateMarkdownTable(race: race, results: results)
+                        PlatformServices.copyToPasteboard(md)
+                        onCopy("Markdown table copied!")
+                    } label: {
+                        Label("Copy Markdown Table", systemImage: "tablecells")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+
+                    Button {
+                        let csv = PlatformServices.generateCSV(race: race, results: results)
+                        PlatformServices.copyToPasteboard(csv)
+                        onCopy("CSV copied!")
+                    } label: {
+                        Label("Copy as CSV (Excel / Numbers)", systemImage: "doc.plaintext")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                }
+            }
+        }
     }
 }

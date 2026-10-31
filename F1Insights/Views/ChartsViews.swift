@@ -185,16 +185,33 @@ struct StrategyView: View {
     let load: () async -> Void
 
     @State private var isInitialLoad = true
+    @State private var rows: [DriverStopsRow] = []
 
-    private var nameLookup: [String: (name: String, team: String)] {
-        Dictionary(uniqueKeysWithValues: results.map {
-            ($0.driver.driverId, ($0.driver.displayName, $0.constructor.constructorId))
-        })
+    private struct DriverStopsRow: Identifiable {
+        let driverId: String
+        let name: String
+        let team: String
+        let stops: [PitStop]
+
+        var id: String { driverId }
     }
 
-    private var grouped: [(driverId: String, stops: [PitStop])] {
-        Dictionary(grouping: pitStops, by: \.driverId)
-            .map { ($0.key, $0.value.sorted { (Int($0.lap) ?? 0) < (Int($1.lap) ?? 0) }) }
+    private func rebuildRows() {
+        let lookup: [String: (name: String, team: String)] = Dictionary(
+            results.map { ($0.driver.driverId, ($0.driver.displayName, $0.constructor.constructorId)) },
+            uniquingKeysWith: { a, _ in a }
+        )
+        self.rows = Dictionary(grouping: pitStops, by: \.driverId)
+            .map { driverId, stops in
+                let sortedStops = stops.sorted { (Int($0.lap) ?? 0) < (Int($1.lap) ?? 0) }
+                let meta = lookup[driverId]
+                return DriverStopsRow(
+                    driverId: driverId,
+                    name: meta?.name ?? driverId.capitalized,
+                    team: meta?.team ?? driverId,
+                    stops: sortedStops
+                )
+            }
             .sorted { ($0.stops.count, $1.driverId) > ($1.stops.count, $0.driverId) }
     }
 
@@ -212,14 +229,13 @@ struct StrategyView: View {
                             subtitle: "Pit stop data is available from 2011 onward.")
             } else {
                 Chart {
-                    ForEach(grouped, id: \.driverId) { row in
-                        let meta = nameLookup[row.driverId]
+                    ForEach(rows) { row in
                         ForEach(row.stops) { stop in
                             PointMark(
                                 x: .value("Lap", Int(stop.lap) ?? 0),
-                                y: .value("Driver", meta?.name ?? row.driverId.capitalized)
+                                y: .value("Driver", row.name)
                             )
-                            .foregroundStyle(TeamColor.color(for: meta?.team ?? row.driverId))
+                            .foregroundStyle(TeamColor.color(for: row.team))
                             .symbolSize(160)
                             .annotation(position: .top) {
                                 Text(stop.duration ?? "")
@@ -233,8 +249,13 @@ struct StrategyView: View {
                 .padding(.top)
             }
         }
+        .onAppear { rebuildRows() }
+        .onChange(of: pitStops) { rebuildRows() }
+        .onChange(of: results) { rebuildRows() }
         .task {
+            rebuildRows()
             await load()
+            rebuildRows()
             isInitialLoad = false
         }
     }

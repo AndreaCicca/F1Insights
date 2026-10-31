@@ -48,10 +48,7 @@ struct SeasonHeader: View {
                     }
                     .contentShape(Rectangle())
                 }
-                #if os(macOS)
-                .menuStyle(.button)
-                .buttonStyle(.borderless)
-                #endif
+                .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
             }

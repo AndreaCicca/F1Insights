@@ -24,7 +24,7 @@ extension URLSession {
         maxAttempts: Int = 5
     ) async throws -> T {
         var request = URLRequest(url: url)
-        request.setValue("F1Insights/1.0 (macOS)", forHTTPHeaderField: "User-Agent")
+        request.setValue("F1Insights/1.0 (Apple)", forHTTPHeaderField: "User-Agent")
 
         var lastError: Error = F1APIError.empty
         for attempt in 0..<max(1, maxAttempts) {

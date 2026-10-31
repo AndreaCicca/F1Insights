@@ -18,41 +18,44 @@ private struct SelectableColumnList<Item: Identifiable & Hashable, RowContent: V
 
     var body: some View {
         @Bindable var state = state
-        Group {
-            if isLoading && items.isEmpty {
-                LoadingView(label: loadingLabel)
-            } else if items.isEmpty {
-                MessageView(systemImage: emptyIcon, title: emptyTitle, subtitle: emptySubtitle)
-            } else {
-                Group {
-                    if isCompactStack {
-                        List(items) { item in
-                            NavigationLink(value: item) {
-                                rowContent(item)
-                            }
-                        }
-                    } else {
-                        List(items, selection: $selection) { item in
-                            rowContent(item)
-                                .tag(item.id)
-                        }
+        content
+            .navigationTitle(Text(verbatim: title))
+            .toolbar {
+                #if os(iOS)
+                if isCompactStack {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        SeasonCompactPicker(season: $state.season, seasons: state.availableSeasons)
                     }
                 }
-                .listStyle(.inset)
-                .refreshable {
-                    await state.loadInitial(forceRefresh: true)
+                #endif
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if isLoading && items.isEmpty {
+            LoadingView(label: loadingLabel)
+        } else if items.isEmpty {
+            MessageView(systemImage: emptyIcon, title: emptyTitle, subtitle: emptySubtitle)
+        } else if isCompactStack {
+            List(items) { item in
+                NavigationLink(value: item) {
+                    rowContent(item)
                 }
             }
-        }
-        .navigationTitle(Text(verbatim: title))
-        .toolbar {
-            #if os(iOS)
-            if isCompactStack {
-                ToolbarItem(placement: .topBarTrailing) {
-                    SeasonCompactPicker(season: $state.season, seasons: state.availableSeasons)
-                }
+            .listStyle(.inset)
+            .refreshable {
+                await state.loadInitial(forceRefresh: true)
             }
-            #endif
+        } else {
+            List(items, selection: $selection) { item in
+                rowContent(item)
+                    .tag(item.id)
+            }
+            .listStyle(.inset)
+            .refreshable {
+                await state.loadInitial(forceRefresh: true)
+            }
         }
     }
 }
@@ -73,10 +76,11 @@ struct RaceListColumn: View {
     var isCompactStack: Bool = false
     @State private var search = ""
     @State private var filter: RaceStatusFilter = .all
+    @State private var filteredRaces: [Race] = []
 
-    private var filtered: [Race] {
+    private func updateFilteredRaces() {
         let now = Date()
-        return state.races.filter { race in
+        filteredRaces = state.races.filter { race in
             guard race.matches(query: search) else { return false }
             switch filter {
             case .all:
@@ -92,7 +96,7 @@ struct RaceListColumn: View {
     var body: some View {
         SelectableColumnList(
             title: "\(state.season) Calendar",
-            items: filtered,
+            items: filteredRaces,
             isLoading: state.isLoadingSchedule && state.races.isEmpty,
             loadingLabel: "Loading calendar…",
             emptyIcon: "flag.checkered",
@@ -101,7 +105,15 @@ struct RaceListColumn: View {
             selection: $selection,
             isCompactStack: isCompactStack
         ) { race in
-            RaceRow(race: race)
+            RaceRow(
+                round: race.round,
+                raceName: race.raceName,
+                circuitName: race.circuit.circuitName,
+                country: race.circuit.location.country,
+                startDate: race.startDate,
+                circuit: race.circuit,
+                season: race.season
+            )
         }
         .searchable(text: $search, placement: .sidebar, prompt: "Search races, circuits, countries")
         .toolbar {
@@ -115,14 +127,24 @@ struct RaceListColumn: View {
                 .labelsHidden()
             }
         }
+        .onAppear { updateFilteredRaces() }
+        .onChange(of: state.races) { updateFilteredRaces() }
+        .onChange(of: search) { updateFilteredRaces() }
+        .onChange(of: filter) { updateFilteredRaces() }
     }
 }
 
 private struct RaceRow: View {
-    let race: Race
+    let round: String
+    let raceName: String
+    let circuitName: String
+    let country: String?
+    let startDate: Date?
+    let circuit: Circuit
+    let season: String
 
     private var isCompleted: Bool {
-        guard let d = race.startDate else { return false }
+        guard let d = startDate else { return false }
         return d <= Date()
     }
 
@@ -131,7 +153,7 @@ private struct RaceRow: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(isCompleted ? Color.secondary.opacity(0.12) : Color.accentColor.opacity(0.15))
-                Text(race.round)
+                Text(round)
                     .font(.caption.monospacedDigit().weight(.bold))
                     .foregroundStyle(isCompleted ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.accentColor))
             }
@@ -139,7 +161,7 @@ private struct RaceRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
-                    Text(race.raceName)
+                    Text(raceName)
                         .font(.body.weight(.medium))
                         .lineLimit(1)
 
@@ -150,7 +172,7 @@ private struct RaceRow: View {
                     }
                 }
 
-                Text(race.circuit.location.country ?? race.circuit.circuitName)
+                Text(country ?? circuitName)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -158,7 +180,7 @@ private struct RaceRow: View {
 
             Spacer(minLength: 4)
 
-            if let d = race.startDate {
+            if let d = startDate {
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(d, format: .dateTime.day().month(.abbreviated))
                         .font(.caption.monospacedDigit().weight(.medium))
@@ -175,13 +197,13 @@ private struct RaceRow: View {
         .padding(.vertical, 3)
         .contextMenu {
             Button {
-                PlatformServices.openInAppleMaps(circuit: race.circuit)
+                PlatformServices.openInAppleMaps(circuit: circuit)
             } label: {
                 Label("Open Circuit in Apple Maps", systemImage: "map.fill")
             }
 
             Button {
-                PlatformServices.openWikipedia(query: "\(race.circuit.circuitName) circuit Formula One")
+                PlatformServices.openWikipedia(query: "\(circuitName) circuit Formula One")
             } label: {
                 Label("Circuit on Wikipedia", systemImage: "book.pages")
             }
@@ -189,13 +211,13 @@ private struct RaceRow: View {
             Divider()
 
             Button {
-                let summary = "\(race.raceName) · \(race.circuit.circuitName) (Round \(race.round), \(race.season))"
+                let summary = "\(raceName) · \(circuitName) (Round \(round), \(season))"
                 PlatformServices.copyToPasteboard(summary)
             } label: {
                 Label("Copy Grand Prix Details", systemImage: "doc.on.doc")
             }
 
-            ShareLink(item: "\(race.raceName) · \(race.circuit.circuitName), \(race.circuit.location.country ?? "") (Round \(race.round), \(race.season))") {
+            ShareLink(item: "\(raceName) · \(circuitName), \(country ?? "") (Round \(round), \(season))") {
                 Label("Share Grand Prix…", systemImage: "square.and.arrow.up")
             }
         }
